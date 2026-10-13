@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -8,8 +7,6 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-
-from monitor import ProfileMonitor
 
 
 load_dotenv()
@@ -27,28 +24,6 @@ with open("config.json", "r", encoding="utf-8") as file:
 CHANNEL_NAME = config["channel_name"]
 TIMEZONE = ZoneInfo(config["timezone"])
 SCHEDULES = config["schedules"]
-
-# Monitor de vídeos postados (YouTube / TikTok / Instagram)
-MONITOR_CONFIG = config.get("monitor", {})
-MONITOR_CHANNEL_NAME = MONITOR_CONFIG.get("channel_name", CHANNEL_NAME)
-# Conferências ao redor de cada hora de postagem e de agendamento:
-# - uma conferência de base antes (check_before_minutes);
-# - depois, conferências frequentes por plataforma, que PARAM assim que um
-#   vídeo novo daquela plataforma é detectado.
-# Tudo pode ser mudado no bloco "monitor" do config.json.
-MONITOR_CHECK_BEFORE = MONITOR_CONFIG.get("check_before_minutes", [10])
-MONITOR_WINDOWS = {
-    # every_minutes = intervalo; checks = máximo de conferências na janela
-    "youtube": {"every_minutes": 2, "checks": 20},
-    "instagram": {"every_minutes": 3, "checks": 8},
-}
-
-for _platform, _window in MONITOR_CONFIG.get("windows", {}).items():
-    MONITOR_WINDOWS[_platform] = {
-        **MONITOR_WINDOWS.get(_platform, {}),
-        **_window
-    }
-
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -201,125 +176,6 @@ async def send_draft_reminder(schedule):
         )
 
 
-async def send_monitor_message(text):
-    for guild in bot.guilds:
-        channel = discord.utils.get(
-            guild.text_channels,
-            name=MONITOR_CHANNEL_NAME
-        )
-
-        if channel is None:
-            print(
-                f"[AVISO] Canal #{MONITOR_CHANNEL_NAME} não encontrado "
-                f"no servidor {guild.name}"
-            )
-            continue
-
-        try:
-            await channel.send(
-                text,
-                allowed_mentions=discord.AllowedMentions.none()
-            )
-        except discord.HTTPException as error:
-            print(
-                f"[AVISO] Não consegui enviar o aviso do monitor "
-                f"em {guild.name}: {error}"
-            )
-
-
-monitor = None
-
-if MONITOR_CONFIG.get("profiles"):
-    monitor = ProfileMonitor(
-        MONITOR_CONFIG,
-        notify=send_monitor_message
-    )
-
-
-def build_monitor_checks():
-    """
-    Monta {"HH:MM": [(plataforma, hora_âncora, "before"|"after"), ...]}.
-    Âncoras = cada hora de postagem e cada hora de agendamento (rascunhos).
-    """
-    anchors = []
-
-    for schedule in SCHEDULES:
-        anchors.append(schedule["time"])
-
-        draft_time = get_draft_time(schedule)
-
-        if draft_time:
-            anchors.append(draft_time)
-
-    profiles = MONITOR_CONFIG.get("profiles", {})
-    base = datetime(2000, 1, 1)
-    checks = {}
-
-    def add(moment, platform, anchor, kind):
-        checks.setdefault(moment.strftime("%H:%M"), []).append(
-            (platform, anchor, kind)
-        )
-
-    for anchor in anchors:
-        hour, minute = map(int, anchor.split(":"))
-        anchor_dt = base.replace(hour=hour, minute=minute)
-
-        for platform, window in MONITOR_WINDOWS.items():
-            if platform not in profiles:
-                continue
-
-            for offset in MONITOR_CHECK_BEFORE:
-                add(
-                    anchor_dt - timedelta(minutes=offset),
-                    platform, anchor, "before"
-                )
-
-            for step in range(1, window["checks"] + 1):
-                add(
-                    anchor_dt + timedelta(minutes=window["every_minutes"] * step),
-                    platform, anchor, "after"
-                )
-
-    return checks
-
-
-MONITOR_CHECKS = build_monitor_checks()
-monitor_tasks = set()
-
-
-def platforms_due(now, current_time):
-    """
-    Plataformas a conferir neste minuto. Nas conferências "depois" da hora, pula
-    a plataforma que já anunciou um vídeo novo desde a hora âncora.
-    """
-    due = []
-
-    for platform, anchor, kind in MONITOR_CHECKS.get(current_time, []):
-        if platform in due:
-            continue
-
-        if kind == "after":
-            hour, minute = map(int, anchor.split(":"))
-
-            anchor_dt = now.replace(
-                hour=hour,
-                minute=minute,
-                second=0,
-                microsecond=0
-            )
-
-            # conferência depois da meia-noite de uma âncora de ontem
-            if anchor_dt > now:
-                anchor_dt -= timedelta(days=1)
-
-            if monitor.detected_since(platform, anchor_dt.timestamp()):
-                continue
-
-        due.append(platform)
-
-    return due
-
-
 @tasks.loop(seconds=1)
 async def scheduler():
     now = get_current_time()
@@ -347,18 +203,6 @@ async def scheduler():
             if key not in already_sent:
                 already_sent.add(key)
                 await send_draft_reminder(schedule)
-
-    # Conferência dos perfis (roda em segundo plano para não travar os avisos)
-    if monitor is not None and current_time in MONITOR_CHECKS:
-        key = f"{current_date}_{current_time}_monitor"
-
-        if key not in already_sent:
-            already_sent.add(key)
-
-            due = platforms_due(now, current_time)
-
-            if due:
-                start_monitor_check(due)
 
     reminder_time = (
         now.replace(second=0, microsecond=0)
@@ -392,19 +236,6 @@ async def before_scheduler():
     await bot.wait_until_ready()
 
 
-async def run_monitor_check(platforms=None):
-    try:
-        await monitor.check_all(platforms)
-    except Exception as error:
-        print(f"[MONITOR] erro inesperado: {error}")
-
-
-def start_monitor_check(platforms=None):
-    task = asyncio.create_task(run_monitor_check(platforms))
-    monitor_tasks.add(task)
-    task.add_done_callback(monitor_tasks.discard)
-
-
 @bot.event
 async def on_ready():
     print("=" * 50)
@@ -412,14 +243,6 @@ async def on_ready():
     print(f"Servidores: {len(bot.guilds)}")
     print(f"Canal: #{CHANNEL_NAME}")
     print("Horário: America/Sao_Paulo")
-
-    if monitor is not None:
-        total = sum(len(items) for items in MONITOR_CHECKS.values())
-
-        print(
-            f"Monitor de vídeos: até {total} conferências por dia "
-            f"em #{MONITOR_CHANNEL_NAME}"
-        )
 
     print("=" * 50)
 
@@ -431,11 +254,6 @@ async def on_ready():
 
     if not scheduler.is_running():
         scheduler.start()
-
-    # Só na primeira vez (sem estado salvo): memoriza o que já existe nos
-    # perfis, para o primeiro vídeo postado depois disso ser anunciado.
-    if monitor is not None and monitor.needs_seed():
-        start_monitor_check()
 
 
 @bot.tree.command(
@@ -608,33 +426,6 @@ async def escala(interaction: discord.Interaction):
         text += "\n"
 
     await interaction.response.send_message(text)
-
-
-@bot.tree.command(
-    name="checar",
-    description="Verifica agora se saiu vídeo novo nos perfis"
-)
-async def checar(interaction: discord.Interaction):
-    if monitor is None:
-        await interaction.response.send_message(
-            "❌ O monitor não está configurado no `config.json`.",
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    results = await monitor.check_all()
-
-    lines = [
-        f"**{platform}**: {status_text}"
-        for platform, status_text in results.items()
-    ]
-
-    await interaction.followup.send(
-        "🔎 **Checagem concluída**\n\n" + "\n".join(lines),
-        ephemeral=True
-    )
 
 
 bot.run(TOKEN)

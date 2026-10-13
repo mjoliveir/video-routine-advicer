@@ -1,12 +1,6 @@
 {
     "channel_name": "avisos",
     "timezone": "America/Sao_Paulo",
-    "monitor": {
-        "profiles": {
-            "youtube": "https://www.youtube.com/@Lepudo1337",
-            "instagram": "https://www.instagram.com/lepudo1337/"
-        }
-    },
     "schedules": [
         {
             "time": "10:00",
