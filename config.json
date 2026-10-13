@@ -1,0 +1,30 @@
+{
+    "channel_name": "avisos",
+    "timezone": "America/Sao_Paulo",
+    "monitor": {
+        "profiles": {
+            "youtube": "https://www.youtube.com/@Lepudo1337",
+            "instagram": "https://www.instagram.com/lepudo1337/"
+        }
+    },
+    "schedules": [
+        {
+            "time": "10:00",
+            "role": "P10:00 - A12:30",
+            "post": "10:00",
+            "schedule": "12:30"
+        },
+        {
+            "time": "15:30",
+            "role": "P15:30 - A18:30",
+            "post": "15:30",
+            "schedule": "18:30"
+        },
+        {
+            "time": "21:30",
+            "role": "P21:30 - A07:00",
+            "post": "21:30",
+            "schedule": "07:00 de amanhã"
+        }
+    ]
+}

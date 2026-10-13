@@ -1,0 +1,31 @@
+# Segredos (token do bot do Discord etc.)
+.env
+.env.*
+!.env.example
+
+# Sessões logadas do navegador (Instagram/TikTok) — contém cookies, NUNCA versionar
+browser_data/
+
+# Estado de execução do monitor (gerado automaticamente)
+monitor_state.json
+
+# Ambiente virtual Python
+venv/
+.venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Logs
+*.log
+logs/
+
+# Sistema operacional / editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
